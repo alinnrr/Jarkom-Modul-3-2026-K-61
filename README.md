@@ -999,3 +999,823 @@ ping -c 4 google.com (dari client ino
 ![12](assets/soal12_4.png)
 
 ---
+
+# Soal Nomor 13
+
+> "Implementasikan dan verifikasikan sistem basis data terdistribusi menggunakan MariaDB Master-Slave Replication untuk database `db_shibuya_K61` antara node Master (`yaga`) dan node Slave (`inumaki`) secara file-based."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Tahap Master (`yaga`)
+
+1. Masuk ke terminal node Master (`yaga`).
+2. Pastikan database `db_shibuya_K61` sudah dibuat dan user replikasi aktif.
+3. Jalankan perintah *insert* data uji coba untuk memicu data baru ke *binary log*:
+
+```bash
+mysql -u root -e "USE db_shibuya_K61; INSERT INTO request_logs (log_message) VALUES ('Tes replikasi sukses final');"
+```
+
+### 2. Tahap Slave (`inumaki`)
+
+1. Masuk ke terminal node Slave (`inumaki`).
+2. Buka konsol MariaDB dan masuk ke database terkait:
+
+```sql
+USE db_shibuya_K61;
+```
+
+3. Lakukan pengecekan tabel untuk melihat apakah data dari Master sudah tersalin secara otomatis:
+
+```sql
+SELECT * FROM request_logs;
+```
+
+## Bukti Keberhasilan
+
+Untuk membuktikan bahwa nomor 13 berhasil, tunjukkan tampilan terminal atau dokumentasi dengan indikator berikut:
+
+1. **Status Replikasi Normal (`SHOW SLAVE STATUS\G`)**
+
+   Pastikan baris **`Slave_IO_Running: Yes`** dan **`Slave_SQL_Running: Yes`**. Ini membuktikan bahwa jalur komunikasi antara `yaga` dan `inumaki` terhubung aktif tanpa kendala.
+![alt text](assets/image.png)
+
+2. **Hasil Query Data di Slave (`SELECT * FROM request_logs;`)**
+
+   Tampilan terminal Slave menunjukkan baris data yang dikirim dari Master:
+![alt text](assets/image-1.png)
+
+
+*Adanya data tersebut secara real-time tanpa perlu input manual di Slave memastikan bahwa replikasi Master-Slave telah berjalan dengan sempurna.*
+
+# Soal Nomor 14
+
+> "Implementasikan dan verifikasikan konfigurasi jaringan, Nginx, PHP-FPM, serta konektivitas API Worker pada lima node worker (`maki`, `panda`, `nanami`, `todo`, `kirara`) yang terhubung ke database `db_shibuya_K61` di node Master (`yaga`)."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Tahap Konfigurasi Network & Layanan Web/API Worker
+
+1. Masuk ke terminal masing-masing node worker (`maki`, `panda`, `nanami`, `todo`, dan `kirara`).
+2. Atur konfigurasi alamat IP statis pada interface `eth0`, rute default, serta konfigurasi DNS:
+   - **Maki** (`10.94.4.4`), **Panda** (`10.94.4.5`) sebagai Web Frontend Worker.
+   - **Nanami** (`10.94.4.6`), **Todo** (`10.94.4.7`), **Kirara** (`10.94.4.8`) sebagai API Worker.
+3. Install paket `nginx`, `php-fpm` (versi 8.4), dan `php-mysql`.
+4. Terapkan konfigurasi blok `location ~ \.php$` yang bersih pada Nginx (`/etc/nginx/sites-available/default`) untuk menghindari error *502 Bad Gateway*, lalu jalankan layanan PHP-FPM dan Nginx:
+
+```bash
+service php8.4-fpm start
+killall nginx 2>/dev/null
+nginx
+```
+
+### 2. Tahap Pengujian dari Master (`yaga`)
+
+1. Masuk ke terminal node Master (`yaga`).
+2. Lakukan pengecekan akses web frontend menggunakan `curl` ke node worker web:
+
+```bash
+curl http://10.94.4.4
+curl http://10.94.4.5
+```
+
+3. Lakukan pengujian endpoint API worker untuk memastikan komunikasi request dan pencatatan log otomatis ke database master `yaga`:
+
+```bash
+curl http://10.94.4.6/api/
+curl http://10.94.4.7/api/
+curl http://10.94.4.8/api/
+```
+
+4. Verifikasi data log yang masuk pada database `db_shibuya_K61` di Master:
+
+```bash
+mysql -u root -e "USE db_shibuya_K61; SELECT * FROM request_logs;"
+```
+
+## Bukti Keberhasilan
+
+Untuk membuktikan bahwa nomor 14 berhasil, tunjukkan tampilan terminal atau dokumentasi dengan indikator berikut:
+
+1. **Respons Berhasil dari Web Frontend Worker (`maki` & `panda`)**
+
+   Tampilan terminal Master saat melakukan `curl` ke node `maki` (`10.94.4.4`) maupun `panda` (`10.94.4.5`) menampilkan halaman HTML dengan status sukses tanpa kendala:
+
+![alt text](assets/image-2.png)
+
+2. **Respons Berhasil dari API Worker (`nanami`, `todo`, `kirara`)**
+
+   Tampilan terminal Master saat melakukan `curl` ke endpoint API worker mengembalikan format JSON sukses dan tercatat di database:
+
+![alt text](assets/image-3.png)
+
+*(Hal serupa juga dikonfirmasi sukses untuk `todo` di `10.94.4.7` dan `kirara` di `10.94.4.8`).*
+
+*Adanya respons HTTP normal dari Nginx/PHP-FPM serta masuknya baris log request secara real-time dari kelima worker ke database master `yaga` memastikan bahwa seluruh konfigurasi jaringan, web server, dan integrasi API telah berjalan dengan sempurna.*
+
+# Soal Nomor 15
+
+> "Konfigurasikan Nginx pada node Internal Load Balancer `geto` (`10.94.4.9`) sebagai Load Balancer internal dengan upstream `api_cluster` yang mengarahkan trafik ke `nanami` dan `todo`. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana `nanami` menerima porsi beban tiga kali lebih banyak daripada `todo`."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Tahap Konfigurasi Network & Nginx Load Balancer di `geto`
+
+1. Masuk ke terminal node `geto` (`10.94.4.9`).
+2. Atur konfigurasi alamat IP statis pada interface `eth0`, rute default, serta nameserver (`10.94.1.2`).
+3. Install paket `nginx`.
+4. Konfigurasikan file `/etc/nginx/sites-available/default` dengan blok `upstream api_cluster` yang mendefinisikan bobot `nanami` (`10.94.4.6`) sebesar 3 dan `todo` (`10.94.4.7`) sebesar 1:
+
+```nginx
+upstream api_cluster {
+    server 10.94.4.6 weight=3;
+    server 10.94.4.7 weight=1;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    server_name _;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+5. Jalankan atau restart layanan Nginx pada `geto`:
+
+```bash
+killall nginx 2>/dev/null
+nginx
+```
+
+### 2. Tahap Pengujian Distribusi Beban (Looping Request)
+
+1. Masuk ke terminal node Master (`yaga`) atau node client lokal.
+2. Lakukan perulangan (`loop`) `curl` ke IP Load Balancer `geto` (`10.94.4.9`) untuk melihat pembagian worker secara bergantian:
+
+```bash
+for i in {1..8}; do curl -s http://10.94.4.9/api/; done
+```
+
+## Bukti Keberhasilan
+
+Untuk membuktikan bahwa nomor 15 berhasil, tunjukkan tampilan terminal dengan indikator berikut:
+
+1. **Distribusi Respon Looping Menunjukkan Rasio 3:1**
+
+   Tampilan terminal saat melakukan *looping request* mengonfirmasi bahwa `nanami` merespons 3 kali lebih sering dibanding `todo`:
+
+![alt text](assets/image-4.png)
+
+*Adanya pembagian trafik secara otomatis dengan rasio bobot 3:1 antara `nanami` dan `todo` melalui `geto` membuktikan bahwa Internal Load Balancer telah terkonfigurasi dengan sukses.*
+
+# Soal Nomor 16 (Lengkap: Gateway Gojo, Frontend Maki/Panda, & API Worker Nanami/Todo)
+
+> "Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam. Konfigurasikan Nginx pada `gojo` untuk melayani domain `jujutsu.K61.com` dan `www.jujutsu.K61.com` menggunakan metode Path-Based Routing. Atur agar request root (`/`) diteruskan secara Round Robin ke worker frontend (`maki` dan `panda`), sedangkan request ke path `/api` diteruskan langsung ke `geto`. Serta pastikan worker backend (`nanami` dan `todo`) terhubung ke database master `yaga` untuk pencatatan log."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Konfigurasi Database & Hak Akses di `yaga` (`10.94.4.2`)
+
+Masuk ke terminal server master database `yaga` untuk memberikan izin akses dari jaringan worker:
+
+```bash
+mysql -u root
+```
+
+Lalu jalankan perintah SQL berikut di dalam MariaDB:
+
+```sql
+CREATE USER 'root'@'10.94.4.%' IDENTIFIED BY '';
+GRANT ALL PRIVILEGES ON db_shibuya_K61.* TO 'root'@'10.94.4.%';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+### 2. Konfigurasi Script & Nginx API di Worker Backend (`nanami` & `todo`)
+
+1. Pastikan direktori dan file script API `/var/www/html/api/index.php` di `nanami` dan `todo` sudah terkonfigurasi dengan benar:
+
+```php
+<?php
+$host = '10.94.4.2'; // IP Master yaga
+$db   = 'db_shibuya_K61';
+$user = 'root';
+$pass = '';
+
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
+    $hostname = gethostname();
+    $stmt = $pdo->prepare("INSERT INTO request_logs (log_message) VALUES (:msg)");
+    $stmt->execute(['msg' => "Request diproses oleh API Worker: " . $hostname]);
+
+    echo json_encode([
+        "status" => "success",
+        "worker" => $hostname,
+        "message" => "Berhasil mencatat log ke database yaga!"
+    ]);
+} catch (\PDOException $e) {
+    echo json_encode([
+        "status" => "error",
+        "message" => "Gagal koneksi DB: " . $e->getMessage()
+    ]);
+}
+?>
+```
+
+2. Restart layanan web server pada worker:
+
+```bash
+systemctl restart nginx
+systemctl restart php*-fpm
+```
+
+### 3. Konfigurasi Path-Based Routing di Gateway `gojo`
+
+1. Masuk ke terminal node `gojo`.
+2. Edit file konfigurasi Nginx:
+
+```bash
+nano /etc/nginx/sites-available/default
+```
+
+3. Masukkan konfigurasi upstream frontend serta block server dengan path-based routing:
+
+```nginx
+upstream frontend_cluster {
+    server 10.94.X.X; # IP maki
+    server 10.94.X.X; # IP panda
+}
+
+server {
+    listen 80;
+    server_name jujutsu.K61.com www.jujutsu.K61.com;
+
+    # Routing untuk path /api diteruskan ke geto (Internal LB)
+    location /api {
+        proxy_pass http://10.94.4.9; # IP geto
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Routing untuk root (/) diteruskan ke frontend cluster (maki & panda)
+    location / {
+        proxy_pass http://frontend_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+4. Uji sintaks dan restart Nginx di `gojo`:
+
+```bash
+nginx -t
+systemctl restart nginx
+```
+
+### 4. Tahap Pengujian dari Client (`itadori`)
+
+1. **Pengujian Akses Frontend (Root `/`):**
+
+```bash
+curl -H "Host: jujutsu.K61.com" http://10.94.1.10/
+```
+
+*(Akan dibalas secara bergantian oleh worker `maki` atau `panda`).*
+
+2. **Pengujian Akses API (`/api`):**
+
+```bash
+curl -H "Host: jujutsu.K61.com" http://10.94.1.10/api/
+```
+
+*(Akan diteruskan via `geto` ke worker `nanami`/`todo` dan sukses mencatat log ke database `yaga`).*
+
+## Bukti Keberhasilan
+
+1. **Pengujian Akses Web Utama (Path /) Menuju Frontend Cluster (maki / panda):**
+   ![alt text](assets/image-5.png)
+
+2. **Respons Akses Path `/api` Berhasil dan Tercatat di Database:**
+   ![alt text](assets/image-6.png)
+
+3. **Verifikasi Data Log pada Database `yaga`:**
+   ![alt text](assets/image-7.png)
+
+*Keberhasilan pemisahan trafik path `/` ke frontend (`maki`/`panda`) dan path `/api` ke internal load balancer (`geto`) melalui gerbang utama `gojo`, serta berjalannya sistem logging ke database `yaga`, membuktikan seluruh arsitektur jaringan telah terkonfigurasi dengan sempurna.*
+
+# Soal Nomor 17 (Lengkap: IP Logging & Internal Load Balancing via Geto ke Nanami/Todo & Yaga)
+
+> "Konfigurasikan internal load balancer pada `geto` untuk menerima trafik `/api` dari gateway `gojo`, lalu meneruskannya secara Round Robin ke worker backend `nanami` dan `todo`. Terapkan konfigurasi *Real IP* agar alamat IP asli dari klien luar (`itadori`) tidak hilang di balik proxy, serta pastikan worker backend berhasil mencatat log IP klien tersebut ke dalam tabel `request_logs` di database master `yaga`."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Penyesuaian Skema Database di Master `yaga` (`10.94.4.2`)
+
+Masuk ke terminal server master database `yaga` untuk menambahkan kolom `client_ip` pada tabel `request_logs` agar dapat menyimpan IP asli klien:
+
+```bash
+mysql -u root db_shibuya_K61
+```
+
+Lalu jalankan perintah SQL berikut di dalam MariaDB:
+
+```sql
+ALTER TABLE request_logs ADD COLUMN client_ip VARCHAR(45) NOT NULL;
+EXIT;
+```
+
+### 2. Konfigurasi Global Real IP di Internal Load Balancer `geto` (`10.94.4.9`)
+
+1. Buka file konfigurasi utama Nginx untuk mendefinisikan sumber terpercaya header IP klien:
+
+```bash
+nano /etc/nginx/nginx.conf
+```
+
+2. Tambahkan pengaturan berikut di dalam blok `http { ... }`:
+
+```nginx
+http {
+    # Pengaturan Real IP agar mengenali header dari Gojo (10.94.1.10)
+    set_real_ip_from 10.94.1.10;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+    
+    # ... konfigurasi bawaan lainnya ...
+}
+```
+
+### 3. Konfigurasi Upstream & Routing Path di `geto`
+
+1. Edit file konfigurasi site Nginx di `geto`:
+
+```bash
+nano /etc/nginx/sites-available/default
+```
+
+2. Masukkan blok `upstream` cluster worker backend serta aturan routing `location`:
+
+```nginx
+upstream api_cluster {
+    server 10.94.4.6; # nanami
+    server 10.94.4.7; # todo
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    # Routing untuk path /api diteruskan ke upstream worker backend
+    location /api {
+        proxy_pass http://api_cluster/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        proxy_pass http://api_cluster/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+3. Uji sintaks dan muat ulang layanan Nginx di `geto`:
+
+```bash
+nginx -t
+systemctl restart nginx
+```
+
+### 4. Perbaikan Document Root pada Worker Backend (`nanami` & `todo`)
+
+Pastikan direktori `root` pada file konfigurasi Nginx worker backend (`nanami`: `10.94.4.6` dan `todo`: `10.94.4.7`) mengarah langsung ke `/var/www/html` agar terhindar dari error 404 path traversal:
+
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root /var/www/html;
+    index index.php index.html index.htm index.nginx-debian.html;
+
+    server_name _;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+Restart layanan web server pada masing-masing worker:
+
+```bash
+nginx -t && systemctl restart nginx
+```
+
+### 5. Tahap Pengujian Akhir dari Client (`itadori`)
+
+1. **Pengujian Permintaan API & Pencatatan IP Klien:**
+
+```bash
+curl -H "Host: jujutsu.K61.com" http://10.94.1.10/api/
+```
+
+*(Respons JSON akan menampilkan status sukses, worker yang menangani, serta IP asli klien).*
+
+## Bukti Keberhasilan
+
+1. **Respons Berhasil dari Klien dengan IP Logging yang Akurat:**
+![alt text](assets/image-8.png)
+
+2. **Verifikasi Data pada Tabel `request_logs` di Database `yaga`:**
+![alt text](assets/image-9.png)
+
+*Keberhasilan penerusan request melalui proxy chain (`gojo` -> `geto` -> `nanami`/`todo`), penerapan global `real_ip` untuk menangkap alamat IP asal klien, serta keberhasilan penyimpanan data ke database `yaga`, membuktikan seluruh mekanisme IP Logging dan Internal Load Balancing telah berfungsi dengan sempurna.*
+
+# Soal Nomor 18 (Lengkap: Konfigurasi Failover Worker Cadangan Kirara & Passive Health Check)
+
+> "Konfigurasikan internal load balancer pada `geto` agar worker backend `nanami` (`10.94.4.6`) dan `todo` (`10.94.4.7`) menerapkan *passive health check* dengan parameter `max_fails=2` dan `fail_timeout=5s`, serta jadikan `kirara` (`10.94.4.8`) sebagai worker cadangan (*backup*). Pastikan layanan API pada `kirara` kompatibel dengan database master `yaga` dan simulasikan gangguan pada worker utama untuk membuktikan bahwa trafik otomatis dialihkan ke `kirara` tanpa error 502."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Konfigurasi Internal Load Balancer di `geto` (`10.94.4.9`)
+
+1. Masuk ke terminal node `geto`.
+2. Edit file konfigurasi Nginx:
+
+```bash
+nano /etc/nginx/sites-available/default
+```
+
+3. Perbarui blok `upstream api_cluster` dengan menambahkan parameter *passive health check* dan server `backup` (`kirara`):
+
+```nginx
+upstream api_cluster {
+    server 10.94.4.6 max_fails=2 fail_timeout=5s; # nanami (utama)
+    server 10.94.4.7 max_fails=2 fail_timeout=5s; # todo (utama)
+    server 10.94.4.8 backup;                     # kirara (cadangan)
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    location /api {
+        proxy_pass http://api_cluster/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        proxy_pass http://api_cluster/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+4. Uji sintaks dan muat ulang layanan Nginx di `geto`:
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+*(Cara verifikasi: Pastikan perintah `nginx -t` mengembalikan pesan `test is successful`).*
+
+### 2. Konfigurasi Worker Cadangan `kirara` (`10.94.4.8`)
+
+1. Buat direktori dan skrip API di `kirara` agar kompatibel dengan database master `yaga` serta mendukung penangkapan IP klien:
+
+```bash
+mkdir -p /var/www/html/api
+nano /var/www/html/api/index.php
+```
+
+2. Masukkan kode skrip berikut:
+
+```php
+<?php
+$host = '10.94.4.2'; // IP Master yaga
+$db   = 'db_shibuya_K61';
+$user = 'root';
+$pass = '';
+
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
+    $hostname = gethostname();
+    $client_ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'];
+    
+    $stmt = $pdo->prepare("INSERT INTO request_logs (log_message, client_ip) VALUES (:msg, :cip)");
+    $stmt->execute([
+        'msg' => "Request diproses oleh API Worker Backup: " . $hostname,
+        'cip' => $client_ip
+    ]);
+
+    echo json_encode([
+        "status" => "success",
+        "worker" => $hostname,
+        "client_ip" => $client_ip,
+        "message" => "Berhasil mencatat log ke database yaga melalui backup!"
+    ]);
+} catch (\PDOException $e) {
+    echo json_encode([
+        "status" => "error",
+        "message" => "Gagal koneksi DB: " . $e->getMessage()
+    ]);
+}
+?>
+```
+
+3. Konfigurasi file Nginx di `kirara`:
+
+```bash
+nano /etc/nginx/sites-available/default
+```
+
+Isi dengan konfigurasi berikut:
+
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root /var/www/html;
+    index index.php index.html index.htm index.nginx-debian.html;
+
+    server_name _;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+4. Uji sintaks dan restart layanan di `kirara`:
+
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+### 3. Simulasi Gangguan (Failover Test) & Pengujian dari Client (`itadori`)
+
+1. Hentikan layanan web server pada worker utama (`nanami` dan `todo`):
+
+```bash
+service nginx stop
+```
+
+2. Lakukan pengujian akses API dari client `itadori`:
+
+```bash
+curl -H "Host: jujutsu.K61.com" http://10.94.1.10/api/
+```
+
+## Bukti Keberhasilan
+
+1. **Respons Berhasil Dialihkan ke Worker Cadangan (`kirara`):**
+
+![alt text](assets/image-10.png)
+
+2. **Verifikasi Data pada Tabel `request_logs` di Database `yaga`:**
+
+![alt text](assets/image-11.png)
+
+*Keberhasilan pengalihan trafik secara otomatis ke worker `kirara` saat worker utama mati (berkat parameter `max_fails` dan `fail_timeout`), serta suksesnya pencatatan data ke database `yaga` tanpa menampilkan error `502 Bad Gateway`, membuktikan mekanisme high availability dan failover telah berfungsi sempurna.*
+
+# Soal Nomor 19 (Lengkap: Konfigurasi Proxy Caching & Rate Limiting pada Gateway Gojo)
+
+> "Konfigurasikan Nginx Proxy Caching pada `gojo` (`10.94.1.10`) untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header `X-Cache-Status`. Terapkan pula rate limiting pada path `/api` dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status `MISS` pada akses awal dan `HIT` pada akses berikutnya, serta uji rate limiting secara terpisah untuk melihat kode status saat batas terlampaui."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Konfigurasi Global Cache Zone & Rate Limit Zone di `gojo` (`10.94.1.10`)
+
+1. Masuk ke terminal node `gojo`.
+2. Edit file konfigurasi utama Nginx:
+
+Bash
+```bash
+nano /etc/nginx/nginx.conf
+```
+
+3. Tambahkan direktif global `proxy_cache_path` dan `limit_req_zone` di dalam blok `http { ... }`:
+
+Nginx
+```nginx
+http {
+    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m max_size=10g inactive=60m use_temp_path=off;
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+    
+    # ... konfigurasi bawaan lainnya ...
+}
+```
+
+### 2. Konfigurasi Virtual Host, Proxy Caching, & Rate Limiting di `gojo`
+
+1. Edit file konfigurasi situs default di `gojo`:
+
+Bash
+```bash
+nano /etc/nginx/sites-available/default
+```
+
+2. Sesuaikan isinya dengan konfigurasi berikut:
+
+Nginx
+```nginx
+upstream frontend_cluster {
+    server 10.94.4.4; # maki
+    server 10.94.4.5; # panda
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name jujutsu.K61.com www.jujutsu.K61.com;
+
+    # Rate Limiting pada path /api (10 request per detik)
+    location /api {
+        limit_req zone=api_limit burst=20 nodelay;
+        proxy_pass http://10.94.4.9; # geto
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Proxy Caching pada frontend (root /) dengan masa berlaku 10 menit
+    location / {
+        proxy_cache my_cache;
+        proxy_cache_valid 200 302 10m;
+        proxy_cache_valid 404 1m;
+        add_header X-Cache-Status $upstream_cache_status;
+
+        proxy_pass http://frontend_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+3. Buat direktori cache dan atur kepemilikan foldernya:
+
+Bash
+```bash
+mkdir -p /var/cache/nginx
+chown -R www-data:www-data /var/cache/nginx
+```
+
+4. Uji sintaks dan muat ulang layanan Nginx di `gojo`:
+
+Bash
+```bash
+nginx -t
+systemctl reload nginx
+```
+
+*(Cara verifikasi: Pastikan perintah `nginx -t` mengembalikan pesan `test is successful`).*
+
+### 3. Pengujian dari Client (`itadori`)
+
+#### A. Uji Coba Proxy Caching (`MISS` & `HIT`)
+
+Lakukan pengaksesan header halaman utama secara beruntun dari klien `itadori`:
+
+Bash
+```bash
+curl -I -H "Host: jujutsu.K61.com" http://10.94.1.10/
+```
+
+#### B. Uji Coba Rate Limiting pada Path `/api`
+
+Jalankan pengujian perulangan request cepat untuk menguji batas laju akses API:
+
+Bash
+```bash
+for i in {1..15}; do curl -s -o /dev/null -w "%{http_code}\n" -H "Host: jujutsu.K61.com" http://10.94.1.10/api/; done
+```
+
+## Bukti Keberhasilan
+
+1. **Respons Proxy Caching (`MISS` pada akses pertama, `HIT` pada akses kedua):**
+
+![alt text](assets/image-12.png)
+
+2. **Verifikasi Status Code Rate Limiting pada Path `/api`:**
+
+![alt text](assets/image-13.png)
+
+*Keberhasilan penerapan caching halaman web frontend (menghasilkan status `MISS` lalu `HIT`) serta kestabilan penanganan trafik pada pembatasan laju request (`/api`) melalui gateway `gojo`, membuktikan seluruh optimasi performa dan keamanan layanan telah berjalan sempurna.*
+
+# Soal Nomor 20 (Lengkap: Pengujian Kapasitas Benchmark & Analisis Log Gateway)
+
+> "Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju [http://jujutsu..com/](http://jujutsu..com/). Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan pengujian tambahan pada endpoint /api untuk mengamati efek rate limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit."
+
+## Langkah-Langkah Menjalankan & Verifikasi
+
+### 1. Konfigurasi Skrip Otomatisasi Benchmark di Node **`kusakabe`** (`10.94.3.10`)
+
+1. Masuk ke terminal node `kusakabe` dan pastikan jaringan DHCP serta pengaturan DNS sementara aktif:
+
+   Bash
+   ```bash
+   udhcpc -i eth0
+   echo "nameserver 8.8.8.8" > /etc/resolv.conf
+   ```
+
+2. Buat file skrip otomatisasi pengujian `20.sh`:
+
+   Bash
+   ```bash
+   nano 20.sh
+   ```
+
+3. Masukkan kode skrip berikut (termasuk instalasi otomatis utilitas *Apache Benchmark*):
+
+   Bash
+   ```bash
+   #!/bin/bash
+   echo "[*] Memperbarui konfigurasi DHCP interface eth0..."
+   udhcpc -i eth0
+
+   echo "[*] Mengatur DNS sementara untuk koneksi..."
+   echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+   if ! command -v ab &> /dev/null; then
+       apk update && apk add apache2-utils
+   fi
+
+   TARGET_IP="10.94.1.10" # IP Gateway Gojo
+   DOMAIN="jujutsu.K61.com"
+
+   echo "=========================================="
+   echo "1. Menjalankan Benchmark pada Frontend ( / )"
+   echo "=========================================="
+   ab -n 600 -c 30 -H "Host: $DOMAIN" http://$TARGET_IP/ > result_root.txt
+   cat result_root.txt | grep -E "Requests per second|Time per request|Failed requests"
+
+   echo ""
+   echo "=========================================="
+   echo "2. Menjalankan Benchmark pada API ( /api ) - Uji Rate Limiting"
+   echo "=========================================="
+   ab -n 600 -c 30 -H "Host: $DOMAIN" http://$TARGET_IP/api/ > result_api.txt
+   cat result_api.txt | grep -E "Requests per second|Time per request|Failed requests|Non-2xx"
+
+   echo ""
+   echo "[SUCCESS] Pengujian benchmark selesai! Hasil disimpan di result_root.txt dan result_api.txt"
+   ```
+
+4. Jalankan skrip benchmark:
+
+   Bash
+   ```bash
+   bash 20.sh
+   ```
+
+*(Cara verifikasi: Pastikan perintah `ab` menyelesaikan 600 request dengan 30 konkurensi serta menghasilkan file ringkasan `result_root.txt` dan `result_api.txt`).*
+
+### 2. Analisis Access Log di Node **`gojo`** (`10.94.1.10`)
+
+Masuk ke terminal node `gojo` untuk merekapitulasi dan membedakan jenis respons HTTP serta kegagalan pada trafik `/api`:
+
+Bash
+```bash
+grep "/api" /var/log/nginx/access.log | awk '{print $9}' | sort | uniq -c
+```
+
+## Bukti Keberhasilan
+
+1. **Hasil Benchmark Frontend (`/`):**
+   ![alt text](assets/image-14.png)
+
+2. **Hasil Benchmark API (`/api` - Uji Rate Limiting):**
+![alt text](assets/image-15.png)
+
+3. **Rekapitulasi Status Code pada Access Log `gojo`:**
+![alt text](assets/image-16.png)
